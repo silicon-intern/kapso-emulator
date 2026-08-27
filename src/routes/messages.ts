@@ -88,9 +88,11 @@ function interactiveContent(interactive: SendBody["interactive"]): string {
   }>;
   const rows = sections.flatMap((section) => (Array.isArray(section?.rows) ? section.rows : []));
   if (rows.length === 0) return body;
-  const lines = rows.map(
-    (row) => `▸ ${row.title ?? ""}${row.description ? ` — ${row.description}` : ""}`,
-  );
+  const lines = rows.map((row) => {
+    const title = typeof row?.title === "string" ? row.title : "";
+    const description = typeof row?.description === "string" ? row.description : "";
+    return `▸ ${title}${description ? ` — ${description}` : ""}`;
+  });
   return [body, ...lines].filter(Boolean).join("\n");
 }
 
@@ -98,7 +100,7 @@ function templateBodyParams(template: SendBody["template"]): string[] {
   const components = Array.isArray(template?.components) ? template.components : [];
   const body = components.find((component) => component?.type?.toLowerCase?.() === "body");
   return (Array.isArray(body?.parameters) ? body.parameters : [])
-    .map((parameter) => (typeof parameter.text === "string" ? parameter.text : null))
+    .map((parameter) => (typeof parameter?.text === "string" ? parameter.text : null))
     .filter((text): text is string => text !== null);
 }
 
@@ -141,14 +143,21 @@ export function messageRoutes({ app, store }: RouteContext): void {
       type === "sticker"
         ? (body[type as "image"] ?? null)
         : null;
+    // A non-string body/caption must never reach the store: stored content is
+    // rendered by the inspector and shipped on webhooks as a string.
+    if (type === "text" && body.text != null && typeof body.text.body !== "string") {
+      return c.json({ error: { message: "text.body must be a string" } }, 400);
+    }
+    const templateName = typeof body.template?.name === "string" ? body.template.name : "unknown";
+    const caption = typeof mediaRef?.caption === "string" ? mediaRef.caption : "";
     const content =
       type === "text"
         ? (body.text?.body ?? "")
         : type === "template"
-          ? `[plantilla: ${body.template?.name ?? "unknown"}]`
+          ? `[plantilla: ${templateName}]`
           : type === "interactive"
             ? interactiveContent(body.interactive)
-            : (mediaRef?.caption ?? "");
+            : caption;
 
     const conversation = ensureConversation(store, phoneNumberId, to);
     const ks = getKapsoStore(store);
@@ -228,8 +237,11 @@ export function messageRoutes({ app, store }: RouteContext): void {
       template_params: type === "template" ? templateBodyParams(body.template) : null,
       media_id: mediaRef?.id ?? null,
       media_content_type: asset?.content_type ?? null,
-      media_filename: mediaRef?.filename ?? asset?.file_name ?? null,
-      caption: mediaRef?.caption ?? null,
+      media_filename:
+        (typeof mediaRef?.filename === "string" ? mediaRef.filename : null) ??
+        asset?.file_name ??
+        null,
+      caption: caption || null,
       payload: body,
     });
     recordEvent(store, "outbound_message", phoneNumberId, conversation.customer_phone, {

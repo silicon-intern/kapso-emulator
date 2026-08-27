@@ -301,3 +301,45 @@ describe("fallbacks and reset semantics", () => {
     expect(page.last_seq).toBeLessThan(999999);
   });
 });
+
+describe("stored content stays a string", () => {
+  it("rejects an object text.body instead of storing it", async () => {
+    const response = await postJson(metaUrl(`/${PHONE_NUMBER_ID}/messages`), {
+      messaging_product: "whatsapp",
+      to: CUSTOMER,
+      type: "text",
+      text: { body: { nested: true } },
+    });
+    expect(response.status).toBe(400);
+    const inspector = await fetch(`${emulator.url}/`);
+    expect(inspector.status).toBe(200);
+  });
+
+  it("survives null rows and null template parameters", async () => {
+    const list = await postJson(metaUrl(`/${PHONE_NUMBER_ID}/messages`), {
+      messaging_product: "whatsapp",
+      to: CUSTOMER,
+      type: "interactive",
+      interactive: {
+        type: "list",
+        body: { text: "elige" },
+        action: { sections: [{ rows: [null, { title: "Corte" }] }] },
+      },
+    });
+    expect(list.status).toBe(200);
+
+    await createTemplate(`waba-${PHONE_NUMBER_ID}`, "null_param", "Hola {{1}}");
+    const send = await postJson(metaUrl(`/${PHONE_NUMBER_ID}/messages`), {
+      messaging_product: "whatsapp",
+      to: CUSTOMER,
+      type: "template",
+      template: {
+        name: "null_param",
+        language: { code: "es" },
+        components: [{ type: "body", parameters: [null, { type: "text", text: "Ana" }] }],
+      },
+    });
+    expect(send.status).toBe(200);
+    expect((await fetch(`${emulator.url}/`)).status).toBe(200);
+  });
+});

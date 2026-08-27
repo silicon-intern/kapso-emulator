@@ -30,9 +30,11 @@ export function inspectorRoutes({ app, store }: RouteContext): void {
       .map((message) => [
         escapeHtml(message.wamid),
         escapeHtml(message.direction),
-        escapeHtml(message.message_type),
+        escapeHtml(String(message.message_type)),
         escapeHtml(message.customer_phone),
-        escapeHtml(message.content ?? ""),
+        // String() belt: a stored non-string must degrade to an odd cell,
+        // never brick the whole inspector page.
+        escapeHtml(String(message.content ?? "")),
         escapeHtml(message.created_at),
       ]);
     return section(

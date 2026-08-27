@@ -78,7 +78,7 @@ bare, like Meta's own.
 | Route | Behavior |
 |---|---|
 | `GET /platform/v1/whatsapp/phone_numbers/:id` | One connected number. Registered on FIRST lookup (there is no provisioning surface); `whatsapp_business_account_id` is derived from the number id (`waba-<id>`), stable across restarts — resolve the WABA here, then create templates under it. |
-| `GET /platform/v1/whatsapp/messages?conversation_id=&phone_number_id=&direction=&limit=` | Conversation listing, newest first. Rows carry `timestamp`, `content` (rendered for templates), and `kapso.message_type_data` (template name + BODY params) for rehydration. Rows carry NO media fields today — resolve media through the webhook payload or the Meta media routes. |
+| `GET /platform/v1/whatsapp/messages?conversation_id=&phone_number_id=&direction=&limit=` | Conversation listing, newest first; `conversation_id` is REQUIRED (the other filters are optional). Rows carry `timestamp`, `content` (rendered for templates), and `kapso.message_type_data` (template name + BODY params) for rehydration. Rows carry NO media fields today — resolve media through the webhook payload or the Meta media routes. |
 | `POST /platform/v1/whatsapp/broadcasts` | Create; requires a REGISTERED template id (unknown id is a loud 404, never a fake send). Body: `{ whatsapp_broadcast: { name, phone_number_id, whatsapp_template_id } }`. |
 | `POST .../broadcasts/:id/recipients` | Draft-only; body `{ whatsapp_broadcast: { recipients: [{ phone_number, components? }] } }` — `components` is the per-recipient Meta parameter shape, e.g. `[{type:"body", parameters:[{type:"text", text:"Ana"}]}]`, and is what makes each fan-out echo render its own text. Per-broadcast phone dedupe; invalid entries land in `errors`; responds `{ data: { added, duplicates, errors } }`. |
 | `POST .../broadcasts/:id/send` | Fans out one real outbound template message per pending recipient (echoing `whatsapp.message.sent` with the RENDERED body); recipients advance to sent + delivered, then `responded` when the simulated customer replies. Recipients matching a `broadcast` failure rule become `failed` instead. |
@@ -132,6 +132,10 @@ rule and resubmit the same name to get it re-approved.
 - **State is in memory**; with `--state-file` the store snapshots to JSON
   every 2s and restores on boot (stored media URLs stay resolvable).
 - **Phones are normalized to digits** everywhere in the store.
+- **Template rendering by name is a PREFERENCE, not isolation**: an ordinary
+  template send resolves the template by name preferring the sender's WABA
+  and language, but with no local match a same-named template from another
+  WABA still renders — single-process convenience, not tenant separation.
 
 ## Working on this repo
 
