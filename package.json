@@ -1,0 +1,61 @@
+{
+  "name": "kapso-emulator",
+  "version": "0.1.0",
+  "description": "Local emulator for the Kapso WhatsApp platform: Meta Graph proxy, Platform API, and signed webhook loopback. Develop and test WhatsApp flows with zero real messages.",
+  "keywords": [
+    "kapso",
+    "whatsapp",
+    "whatsapp-business",
+    "whatsapp-cloud-api",
+    "emulator",
+    "testing",
+    "webhook",
+    "local-development"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/silicon-intern/kapso-emulator.git"
+  },
+  "homepage": "https://github.com/silicon-intern/kapso-emulator#readme",
+  "bugs": "https://github.com/silicon-intern/kapso-emulator/issues",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "kapso-emulator": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "AGENTS.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx src/cli.ts",
+    "test": "vitest run",
+    "type-check": "tsc --noEmit",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "prepublishOnly": "npm run lint && npm run type-check && npm test && npm run build"
+  },
+  "dependencies": {
+    "@emulators/core": "^0.10.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.10",
+    "@types/node": "^22.10.0",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^4.1.5"
+  }
+}

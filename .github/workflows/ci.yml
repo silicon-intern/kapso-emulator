@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run type-check
+      - run: npm test
+      - run: npm run build
+      - name: CLI smoke test
+        run: |
+          node dist/cli.js --version
+          node dist/cli.js --port 4310 &
+          for i in $(seq 1 20); do
+            curl -fsS http://localhost:4310/ > /dev/null 2>&1 && break
+            sleep 0.5
+          done
+          curl -fsS -X POST http://localhost:4310/meta/whatsapp/v23.0/pn-ci/messages \
+            -H 'X-API-Key: ci' -H 'Content-Type: application/json' \
+            -d '{"to":"15550000001","type":"text","text":{"body":"ci"}}' | grep -q wamid
