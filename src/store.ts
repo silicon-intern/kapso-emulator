@@ -85,3 +85,21 @@ export function nextEventSeq(store: Store): number {
   store.setData(EVENT_SEQ_KEY, next);
   return next;
 }
+
+export function currentEventSeq(store: Store): number {
+  return store.getData<number>(EVENT_SEQ_KEY) ?? 0;
+}
+
+/**
+ * Wipe collections while keeping the wiring AND the event sequence. The seq
+ * must survive a reset: a chat UI cursor-polls /events with its last seen
+ * seq, and a counter restarting at 0 leaves that client permanently deaf to
+ * everything below its stale cursor.
+ */
+export function resetKapsoState(store: Store): void {
+  const settings = getSettings(store);
+  const seq = currentEventSeq(store);
+  store.reset();
+  setSettings(store, settings);
+  store.setData(EVENT_SEQ_KEY, seq);
+}

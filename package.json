@@ -31,7 +31,8 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     }
   },
   "files": [
@@ -45,7 +46,8 @@
     "type-check": "tsc --noEmit",
     "lint": "biome check .",
     "format": "biome check --write .",
-    "prepublishOnly": "npm run lint && npm run type-check && npm test && npm run build"
+    "prepublishOnly": "npm run lint && npm run type-check && npm test",
+    "prepack": "npm run build"
   },
   "dependencies": {
     "@emulators/core": "^0.10.0"

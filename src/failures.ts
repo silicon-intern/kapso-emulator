@@ -67,6 +67,7 @@ export function clearFailureRules(store: Store): void {
 }
 
 function digits(phone: string): string {
+  if (typeof phone !== "string") return "";
   return phone.replace(/\D/g, "");
 }
 

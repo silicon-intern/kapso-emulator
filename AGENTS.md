@@ -16,9 +16,14 @@ npx kapso-emulator --webhook-url <your-webhook-endpoint> --webhook-secret <secre
 #   const emulator = await createKapsoEmulator({ webhook: { url, secret }, echo_delay_ms: 0 });
 ```
 
-Every CLI flag has a `KAPSO_EMULATOR_*` env var twin (`--help` lists them).
-Default port 4300; `--port 0` picks a free one and prints it as
-`KAPSO_EMULATOR_LISTENING <url>`.
+Node >= 20, ESM-only. Every CLI flag has a `KAPSO_EMULATOR_*` env var twin
+(`--help` lists them). The CLI defaults to port 4300; `--port 0` picks a free
+one and prints it as `KAPSO_EMULATOR_LISTENING <url>`. The embedded
+`createKapsoEmulator()` instead defaults to an EPHEMERAL port (parallel test
+suites never collide; pass `port` to pin one) and returns
+`{ url, store, reset(), close() }` — `reset()` is synchronous and wipes state
+while keeping the webhook wiring and the event cursor; `store` is the raw
+`@emulators/core` store for advanced assertions.
 
 ## URL mapping
 
@@ -61,7 +66,7 @@ Two events POST to the configured target, both signed:
 | `POST /meta/whatsapp/:v/:phoneNumberId/media` | Multipart upload; the file PART's content type is validated against Meta's allowed list (the `type` form field does not override it); violations get Meta's `(#100)` error. Responds `{ id }`. |
 | `GET /meta/whatsapp/:v/:mediaId` | Media metadata with `url`/`download_url` pointing at `<emulator>/media-files/:id` (unauthenticated blob, like a CDN URL). |
 | `DELETE /meta/whatsapp/:v/:mediaId` | Delete. |
-| `POST /meta/whatsapp/:v/:wabaId/message_templates` | Create; review is INSTANT (`status: "APPROVED"`) unless a `template_review` failure rule is active (then REJECTED with `rejected_reason`). Re-submitting an existing name+language re-reviews with the new content instead of erroring as duplicate. |
+| `POST /meta/whatsapp/:v/:wabaId/message_templates` | Create; body `{ name, language?, category?, components? }` (Meta's shape — `components` like `[{type:"BODY", text:"Hola {{1}}"}, {type:"FOOTER", text:"..."}]`). Review is INSTANT (`status: "APPROVED"`) unless a `template_review` failure rule is active (then `status: "REJECTED"`; read `rejected_reason` from the listing or by-id read — the create response omits it, like real Meta). Re-submitting an existing name+language re-reviews with the new content instead of erroring as duplicate. Sending a REJECTED registered template is refused with Meta's 132001; a broadcast on one is refused 422. |
 | `GET /meta/whatsapp/:v/:wabaId/message_templates?name=&language=` | Listing, `{ data: [...] }`. |
 | `GET /meta/whatsapp/:v/:wabaId/message_templates/:templateId` | Read by id; unknown or foreign-WABA id gets Meta's own GraphMethodException 404, never a 501. |
 
@@ -73,9 +78,9 @@ bare, like Meta's own.
 | Route | Behavior |
 |---|---|
 | `GET /platform/v1/whatsapp/phone_numbers/:id` | One connected number. Registered on FIRST lookup (there is no provisioning surface); `whatsapp_business_account_id` is derived from the number id (`waba-<id>`), stable across restarts — resolve the WABA here, then create templates under it. |
-| `GET /platform/v1/whatsapp/messages?conversation_id=&phone_number_id=&direction=&limit=` | Conversation listing, newest first. Rows carry `timestamp`, `content` (rendered for templates), and `kapso.message_type_data` (template name + BODY params) for rehydration. |
+| `GET /platform/v1/whatsapp/messages?conversation_id=&phone_number_id=&direction=&limit=` | Conversation listing, newest first. Rows carry `timestamp`, `content` (rendered for templates), and `kapso.message_type_data` (template name + BODY params) for rehydration. Rows carry NO media fields today — resolve media through the webhook payload or the Meta media routes. |
 | `POST /platform/v1/whatsapp/broadcasts` | Create; requires a REGISTERED template id (unknown id is a loud 404, never a fake send). Body: `{ whatsapp_broadcast: { name, phone_number_id, whatsapp_template_id } }`. |
-| `POST .../broadcasts/:id/recipients` | Draft-only; per-broadcast phone dedupe; responds `{ data: { added, duplicates, errors } }`. |
+| `POST .../broadcasts/:id/recipients` | Draft-only; body `{ whatsapp_broadcast: { recipients: [{ phone_number, components? }] } }` — `components` is the per-recipient Meta parameter shape, e.g. `[{type:"body", parameters:[{type:"text", text:"Ana"}]}]`, and is what makes each fan-out echo render its own text. Per-broadcast phone dedupe; invalid entries land in `errors`; responds `{ data: { added, duplicates, errors } }`. |
 | `POST .../broadcasts/:id/send` | Fans out one real outbound template message per pending recipient (echoing `whatsapp.message.sent` with the RENDERED body); recipients advance to sent + delivered, then `responded` when the simulated customer replies. Recipients matching a `broadcast` failure rule become `failed` instead. |
 | `GET .../broadcasts/:id` | Funnel-cumulative counters recomputed from recipient rows. |
 | `GET .../broadcasts/:id/recipients?page=&per_page=` | Paged; server caps `per_page` at 50 (below the common client 100) so multi-page paths get exercised; `meta.total_pages` is the stop authority. |
@@ -84,11 +89,11 @@ bare, like Meta's own.
 
 | Route | Purpose |
 |---|---|
-| `POST /_kapso/simulate/inbound-message` | Inject a customer message; delivers the signed `whatsapp.message.received`. Body: `{ phone_number_id, from, text?, type?, contact_name?, media? { content_type, data_base64, filename?, caption? }, referral? }`. `referral` passes through verbatim as `message.referral` (Meta CTWA shape). |
-| `POST /_kapso/simulate/business-app-message` | Owner reply from the WhatsApp Business App: a sent echo with `origin: business_app`. Body: `{ phone_number_id, from, text }`. |
-| `POST /_kapso/simulate/rotate-conversation` | Retire the active Kapso conversation id, mint a fresh one. Thread identity is `(phone_number_id, customer_phone)`; the Kapso id is transport, as in production. |
+| `POST /_kapso/simulate/inbound-message` | Inject a customer message; delivers the signed `whatsapp.message.received`. Body: `{ phone_number_id, from, text?, type?, contact_name?, media? { content_type, data_base64, filename?, caption? }, referral? }`. Types: text, interactive, image, audio, video, document, sticker. Inbound media deliberately skips Meta's upload MIME allowlist (customers can send anything; only business uploads are validated). `referral` passes through verbatim as `message.referral` (Meta CTWA shape). |
+| `POST /_kapso/simulate/business-app-message` | Owner reply from the WhatsApp Business App: a sent echo with `origin: business_app`, delivered IMMEDIATELY (`echo_delay_ms` applies only to ordinary send echoes). Body: `{ phone_number_id, from, text }`. |
+| `POST /_kapso/simulate/rotate-conversation` | Retire the active Kapso conversation id, mint a fresh one. Body: `{ phone_number_id, from }`. Thread identity is `(phone_number_id, customer_phone)`; the Kapso id is transport, as in production. |
 | `POST /_kapso/simulate/reset` | Wipe all state (including failure rules); webhook wiring survives. |
-| `GET /_kapso/simulate/events?after=<seq>` | Cursor-polled ephemeral feed: typing, read receipts, send log, failure events. |
+| `GET /_kapso/simulate/events?after=<seq>` | Cursor-polled ephemeral feed: read receipts (each carrying a `typing` boolean), the send log, failure events. The cursor survives `reset`, and an out-of-range cursor is clamped back to the real max. |
 | `GET /_kapso/simulate/thread?phone_number_id=&from=` | The emulator's own view of one thread. |
 | `GET`/`POST`/`DELETE /_kapso/simulate/failures` | Failure injection, below. |
 | `GET /` | Inspector: messages, webhook deliveries, conversations. |
@@ -120,9 +125,10 @@ rule and resubmit the same name to get it re-approved.
 - **Unemulated surface = loud 501** with `error: "not_implemented"` plus the
   method and path. The emulator never fakes success for something it does
   not implement; treat a 501 as "add the route or avoid the call".
-- **Ids are unique across emulator restarts** (`wamid.emu.<boot>.<n>`),
-  so consumers deduping webhooks by wamid never see a restarted emulator's
-  messages as duplicates.
+- **Ids are unique across emulator restarts AND across concurrent
+  emulators** (`wamid.emu.<boot>.<n>`, where the boot discriminator carries a
+  random suffix), so consumers deduping webhooks by wamid never see a
+  restarted or parallel emulator's messages as duplicates.
 - **State is in memory**; with `--state-file` the store snapshots to JSON
   every 2s and restores on boot (stored media URLs stay resolvable).
 - **Phones are normalized to digits** everywhere in the store.

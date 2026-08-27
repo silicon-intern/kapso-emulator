@@ -14,6 +14,9 @@ import { kapsoConversationId, kapsoWamid } from "./ids.js";
 import { getKapsoStore, getSettings, type KapsoStore, nextEventSeq } from "./store.js";
 
 export function digitsOnly(phone: string): string {
+  // Runtime guard, not just a type: JSON bodies routinely carry numbers where
+  // phones belong, and a TypeError here escapes as an unmodeled 500.
+  if (typeof phone !== "string") return "";
   return phone.replace(/\D/g, "");
 }
 
@@ -343,16 +346,29 @@ export function renderTemplateContent(
   return footer ? `${substituted}\n\n${footer}` : substituted;
 }
 
-/** Latest registered template by name (any WABA — local runs are one tenant). */
-export function findTemplateByName(store: Store, name: string): KapsoTemplate | undefined {
+/**
+ * Latest registered template by name, preferring the sender's own WABA and
+ * language. A bare latest-by-name lookup let a same-named template in a
+ * FOREIGN WABA hijack rendering; scoping strictly would instead break the
+ * common setup where a consumer registers templates under a real WABA id
+ * unrelated to the number's derived one — so matches are RANKED (WABA match
+ * outranks language match) and the latest overall stays the fallback.
+ */
+export function findTemplateByName(
+  store: Store,
+  name: string,
+  opts: { wabaId?: string; language?: string } = {},
+): KapsoTemplate | undefined {
   const ks = getKapsoStore(store);
-  const matches = ks.templates.findBy("name", name);
-  return matches.sort((a, b) => b.id - a.id)[0];
+  const score = (template: KapsoTemplate): number =>
+    (opts.wabaId && template.waba_id === opts.wabaId ? 2 : 0) +
+    (opts.language && template.language === opts.language ? 1 : 0);
+  return ks.templates.findBy("name", name).sort((a, b) => score(b) - score(a) || b.id - a.id)[0];
 }
 
 /** Positional BODY parameter texts from a components array (send or recipient shape). */
 export function bodyParamsOf(components: Array<Record<string, unknown>> | null): string[] {
-  const body = (components ?? []).find(
+  const body = (Array.isArray(components) ? components : []).find(
     (entry) => typeof entry.type === "string" && entry.type.toLowerCase() === "body",
   );
   const parameters = (body?.parameters ?? []) as Array<{ type?: string; text?: string }>;

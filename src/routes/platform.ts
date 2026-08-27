@@ -1,4 +1,4 @@
-import type { RouteContext } from "@emulators/core";
+import type { Context, RouteContext } from "@emulators/core";
 import type { KapsoBroadcastRecipient } from "./../entities.js";
 import { broadcastFailures } from "./../failures.js";
 import {
@@ -83,31 +83,49 @@ export function platformRoutes({ app, store }: RouteContext): void {
       };
     } | null;
     const input = body?.whatsapp_broadcast;
-    if (!input?.name?.trim() || !input.phone_number_id?.trim() || !input.whatsapp_template_id) {
+    const name = typeof input?.name === "string" ? input.name.trim() : "";
+    const phoneNumberId =
+      typeof input?.phone_number_id === "string" ? input.phone_number_id.trim() : "";
+    const templateId =
+      typeof input?.whatsapp_template_id === "string" ? input.whatsapp_template_id : "";
+    if (!name || !phoneNumberId || !templateId) {
       return c.json(
         { error: { message: "name, phone_number_id and whatsapp_template_id are required" } },
         400,
       );
     }
     const ks = getKapsoStore(store);
-    const template = ks.templates.findOneBy("template_id", input.whatsapp_template_id);
+    const template = ks.templates.findOneBy("template_id", templateId);
     if (!template) {
       // Loud, like the 501 rule: a stale seeded template id must surface as
       // an error the consuming dispatch reports, never as a silent fake send.
       return c.json(
         {
           error: {
-            message: `Unknown whatsapp_template_id "${input.whatsapp_template_id}" — create the template through the Meta proxy first`,
+            message: `Unknown whatsapp_template_id "${templateId}" — create the template through the Meta proxy first`,
           },
         },
         404,
       );
     }
+    // A broadcast can only carry an APPROVED template — the refusal a
+    // consumer's dispatch must handle when the template_review rule rejected
+    // its submission.
+    if (template.status !== "APPROVED") {
+      return c.json(
+        {
+          error: {
+            message: `Template "${template.name}" is ${template.status}, not APPROVED`,
+          },
+        },
+        422,
+      );
+    }
     const broadcast = ks.broadcasts.insert({
       broadcast_id: kapsoBroadcastId(),
-      name: input.name.trim(),
-      phone_number_id: input.phone_number_id.trim(),
-      whatsapp_template_id: input.whatsapp_template_id,
+      name,
+      phone_number_id: phoneNumberId,
+      whatsapp_template_id: templateId,
       status: "draft",
       started_at: null,
       completed_at: null,
@@ -150,9 +168,10 @@ export function platformRoutes({ app, store }: RouteContext): void {
     let duplicates = 0;
     const errors: string[] = [];
     for (const entry of recipients) {
-      const phone = digitsOnly(entry.phone_number ?? "");
+      const rawPhone = isPlainObject(entry) ? entry.phone_number : undefined;
+      const phone = typeof rawPhone === "string" ? digitsOnly(rawPhone) : "";
       if (!phone) {
-        errors.push(`invalid phone_number "${entry.phone_number ?? ""}"`);
+        errors.push(`invalid phone_number ${JSON.stringify(rawPhone ?? "")}`);
         continue;
       }
       if (existing.has(phone)) {
@@ -165,7 +184,7 @@ export function platformRoutes({ app, store }: RouteContext): void {
         broadcast_id: broadcast.broadcast_id,
         phone_number: phone,
         status: "pending",
-        components: entry.components ?? null,
+        components: Array.isArray(entry.components) ? entry.components : null,
         sent_at: null,
         delivered_at: null,
         read_at: null,
@@ -193,12 +212,20 @@ export function platformRoutes({ app, store }: RouteContext): void {
     }
     const startedAt = new Date().toISOString();
     ks.broadcasts.update(broadcast.id, { status: "sending", started_at: startedAt });
-    const fanned = fanOutBroadcast(
-      store,
-      { ...broadcast, status: "sending", started_at: startedAt },
-      template,
-      broadcastFailures(store),
-    );
+    let fanned: number;
+    try {
+      fanned = fanOutBroadcast(
+        store,
+        { ...broadcast, status: "sending", started_at: startedAt },
+        template,
+        broadcastFailures(store),
+      );
+    } catch (error) {
+      // A crashed fan-out must not strand the broadcast in `sending` with no
+      // exit; back to draft, where a retry re-sends the still-pending rows.
+      ks.broadcasts.update(broadcast.id, { status: "draft", started_at: null });
+      throw error;
+    }
     const completed =
       ks.broadcasts.update(broadcast.id, {
         status: "completed",
@@ -260,9 +287,21 @@ export function platformRoutes({ app, store }: RouteContext): void {
   });
 }
 
-/** Catch-all for the rest of the Platform API: loud 501, registered last. */
-export function platformFallbackRoutes({ app }: RouteContext): void {
+/** Catch-all for the rest of the Platform API: loud 501, registered last.
+ *  Same X-API-Key gate as every implemented route, and the BARE prefix is
+ *  registered too — the pattern route requires the trailing slash. */
+export function platformFallbackRoutes({ app, store }: RouteContext): void {
+  const handler = (c: Context): Response => {
+    const denied = requireApiKey(c, getSettings(store));
+    if (denied) return denied;
+    return notImplemented(c, "kapso platform");
+  };
   for (const method of ["GET", "POST", "PUT", "PATCH", "DELETE"]) {
-    app.on(method, "/platform/:rest{.*}", (c) => notImplemented(c, "kapso platform"));
+    app.on(method, "/platform", handler);
+    app.on(method, "/platform/:rest{.*}", handler);
   }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

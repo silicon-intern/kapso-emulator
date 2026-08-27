@@ -1,9 +1,13 @@
-// Ids are unique across emulator RESTARTS, not merely within one process: a
+import { randomBytes } from "node:crypto";
+
+// Ids are unique across emulator RESTARTS and across CONCURRENT emulators: a
 // consuming API dedupes webhooks by wamid, so a counter that restarts at 1
 // makes every post-restart message a silent "duplicate" of the first
-// session's. The boot discriminator keeps that impossible while staying
-// deterministic within a run.
-const BOOT_ID = Date.now().toString(36);
+// session's — and two test-suite emulators booted in the same millisecond
+// would collide on a timestamp alone, so the discriminator carries a random
+// suffix too. Counters are module-level, so emulators sharing one process
+// already share one sequence.
+const BOOT_ID = `${Date.now().toString(36)}${randomBytes(2).toString("hex")}`;
 
 let wamidCounter = 0;
 let conversationCounter = 0;

@@ -1,10 +1,11 @@
-import type { RouteContext } from "@emulators/core";
+import type { Context, RouteContext } from "@emulators/core";
 import type { KapsoMessage, KapsoTemplate } from "./../entities.js";
 import { SUPPORTED_MESSAGE_TYPES } from "./../entities.js";
 import { consumeSendFailure, templateRejection } from "./../failures.js";
 import { mediaMetadataResponse, sendAcceptedResponse, templateResponse } from "./../formatters.js";
 import {
   ensureConversation,
+  ensurePhoneNumber,
   findTemplateByName,
   notImplemented,
   recordEvent,
@@ -80,11 +81,12 @@ interface MediaRef {
  * not just the lead-in sentence.
  */
 function interactiveContent(interactive: SendBody["interactive"]): string {
-  const body = interactive?.body?.text ?? "";
-  const sections = (interactive?.action?.sections ?? []) as Array<{
+  const body = typeof interactive?.body?.text === "string" ? interactive.body.text : "";
+  const rawSections = interactive?.action?.sections;
+  const sections = (Array.isArray(rawSections) ? rawSections : []) as Array<{
     rows?: Array<{ title?: string; description?: string }>;
   }>;
-  const rows = sections.flatMap((section) => section.rows ?? []);
+  const rows = sections.flatMap((section) => (Array.isArray(section?.rows) ? section.rows : []));
   if (rows.length === 0) return body;
   const lines = rows.map(
     (row) => `▸ ${row.title ?? ""}${row.description ? ` — ${row.description}` : ""}`,
@@ -93,10 +95,9 @@ function interactiveContent(interactive: SendBody["interactive"]): string {
 }
 
 function templateBodyParams(template: SendBody["template"]): string[] {
-  const body = (template?.components ?? []).find(
-    (component) => component.type?.toLowerCase() === "body",
-  );
-  return (body?.parameters ?? [])
+  const components = Array.isArray(template?.components) ? template.components : [];
+  const body = components.find((component) => component?.type?.toLowerCase?.() === "body");
+  return (Array.isArray(body?.parameters) ? body.parameters : [])
     .map((parameter) => (typeof parameter.text === "string" ? parameter.text : null))
     .filter((text): text is string => text !== null);
 }
@@ -125,8 +126,8 @@ export function messageRoutes({ app, store }: RouteContext): void {
       return c.json({ success: true });
     }
 
-    const to = body.to?.trim();
-    if (!to) return c.json({ error: { message: "`to` is required" } }, 400);
+    const to = typeof body.to === "string" ? body.to.trim() : "";
+    if (!to) return c.json({ error: { message: "`to` is required and must be a string" } }, 400);
     const type = body.type ?? "text";
     if (!(SUPPORTED_MESSAGE_TYPES as readonly string[]).includes(type)) {
       return notImplemented(c, `meta message type "${type}"`);
@@ -184,9 +185,34 @@ export function messageRoutes({ app, store }: RouteContext): void {
     // A registered template renders its real text for the Platform listing
     // (rehydration's primary source); unknown templates keep only the marker.
     const registered =
-      type === "template" && body.template?.name
-        ? findTemplateByName(store, body.template.name)
+      type === "template" && typeof body.template?.name === "string"
+        ? findTemplateByName(store, body.template.name, {
+            wabaId: ensurePhoneNumber(store, phoneNumberId).waba_id,
+            language:
+              typeof body.template?.language?.code === "string"
+                ? body.template.language.code
+                : undefined,
+          })
         : undefined;
+    // Real Meta only sends APPROVED templates; a registered-but-rejected one
+    // (the template_review failure rule) gets Meta's 132001 so consumers can
+    // exercise their downstream refusal path. Unregistered names stay
+    // sendable with the marker — the local-loop convenience.
+    if (registered && registered.status !== "APPROVED") {
+      return c.json(
+        {
+          error: {
+            message:
+              "(#132001) Template name does not exist in the translation. " +
+              `Template name: ${registered.name}, language: ${registered.language}`,
+            type: "OAuthException",
+            code: 132001,
+            fbtrace_id: "kapso-emulator",
+          },
+        },
+        400,
+      );
+    }
     const message: KapsoMessage = ks.messages.insert({
       wamid: kapsoWamid(),
       phone_number_id: phoneNumberId,
@@ -296,12 +322,15 @@ export function messageRoutes({ app, store }: RouteContext): void {
       category?: string;
       components?: Array<Record<string, unknown>>;
     } | null;
-    if (!body?.name?.trim()) {
+    if (!body || typeof body.name !== "string" || !body.name.trim()) {
       return c.json({ error: { message: "template `name` is required" } }, 400);
+    }
+    if (body.components !== undefined && !Array.isArray(body.components)) {
+      return c.json({ error: { message: "template `components` must be an array" } }, 400);
     }
     const ks = getKapsoStore(store);
     const name = body.name.trim();
-    const language = body.language ?? "es";
+    const language = typeof body.language === "string" ? body.language : "es";
     const rejection = templateRejection(store);
     const review = rejection
       ? { status: "REJECTED", rejected_reason: rejection.reason }
@@ -314,7 +343,7 @@ export function messageRoutes({ app, store }: RouteContext): void {
     // rejected template and submit again under the same name.
     const template: KapsoTemplate = existing
       ? (ks.templates.update(existing.id, {
-          category: body.category ?? existing.category,
+          category: typeof body.category === "string" ? body.category : existing.category,
           components: body.components ?? existing.components,
           ...review,
         }) ?? existing)
@@ -323,7 +352,7 @@ export function messageRoutes({ app, store }: RouteContext): void {
           waba_id: wabaId,
           name,
           language,
-          category: body.category ?? "UTILITY",
+          category: typeof body.category === "string" ? body.category : "UTILITY",
           components: body.components ?? [],
           ...review,
         });
@@ -392,9 +421,17 @@ export function messageRoutes({ app, store }: RouteContext): void {
   });
 }
 
-/** Catch-all for the rest of the Meta proxy: loud 501, registered last. */
-export function metaProxyFallbackRoutes({ app }: RouteContext): void {
+/** Catch-all for the rest of the Meta proxy: loud 501, registered last.
+ *  Same X-API-Key gate as every implemented route, and the BARE prefix is
+ *  registered too — the pattern route requires the trailing slash. */
+export function metaProxyFallbackRoutes({ app, store }: RouteContext): void {
+  const handler = (c: Context): Response => {
+    const denied = requireApiKey(c, getSettings(store));
+    if (denied) return denied;
+    return notImplemented(c, "meta proxy");
+  };
   for (const method of ["GET", "POST", "PUT", "PATCH", "DELETE"]) {
-    app.on(method, "/meta/whatsapp/:rest{.*}", (c) => notImplemented(c, "meta proxy"));
+    app.on(method, "/meta/whatsapp", handler);
+    app.on(method, "/meta/whatsapp/:rest{.*}", handler);
   }
 }

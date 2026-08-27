@@ -9,7 +9,7 @@ import {
   WebhookDispatcher,
 } from "@emulators/core";
 import { type KapsoSeedConfig, kapsoPlugin, seedFromConfig } from "./index.js";
-import { getSettings, setSettings } from "./store.js";
+import { getSettings, resetKapsoState, setSettings } from "./store.js";
 
 const STATE_SAVE_INTERVAL_MS = 2_000;
 
@@ -46,18 +46,22 @@ export async function createKapsoEmulator(
   const store = new Store();
   const webhooks = new WebhookDispatcher();
   app.use("*", cors());
+  // Anything a route failed to model must still answer JSON and leave a
+  // trace: a bare-text 500 breaks consumers that res.json() every response,
+  // and a silent one is undebuggable.
+  app.onError((error, c) => {
+    console.error("[kapso-emulator] unhandled error", error);
+    return c.json(
+      { error: { message: error instanceof Error ? error.message : String(error) } },
+      500,
+    );
+  });
   kapsoPlugin.register(app, store, webhooks, "http://localhost:0");
 
-  const server = serve({ fetch: app.fetch, port: options.port ?? 0 });
-  await new Promise<void>((resolve, reject) => {
-    server.once("listening", () => resolve());
-    server.once("error", reject);
-  });
-  const address = server.address() as AddressInfo;
-  const url = `http://localhost:${address.port}`;
-
-  // Restore BEFORE seeding: the seed re-applies the current wiring (webhook
-  // target, base URL, delays) over whatever settings the snapshot carried.
+  // Restore BEFORE listening (a request racing the restore would see empty
+  // state and then be wiped by it) and BEFORE seeding (the seed re-applies
+  // the current wiring — webhook target, base URL, delays — over whatever
+  // settings the snapshot carried).
   const persistence = options.state_file ? filePersistence(options.state_file) : null;
   let lastSavedSnapshot = "";
   if (persistence) {
@@ -71,6 +75,15 @@ export async function createKapsoEmulator(
       }
     }
   }
+
+  const server = serve({ fetch: app.fetch, port: options.port ?? 0 });
+  await new Promise<void>((resolve, reject) => {
+    server.once("listening", () => resolve());
+    server.once("error", reject);
+  });
+  const address = server.address() as AddressInfo;
+  const url = `http://localhost:${address.port}`;
+
   seedFromConfig(store, url, options);
   const seededSettings = getSettings(store);
 
@@ -92,7 +105,7 @@ export async function createKapsoEmulator(
     url,
     store,
     reset(): void {
-      store.reset();
+      resetKapsoState(store);
       setSettings(store, seededSettings);
       void saveIfChanged();
     },
