@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1
+
+- Expose `./package.json` through the exports map, so tools that read a
+  dependency's manifest (`require.resolve("kapso-emulator/package.json")`)
+  resolve it.
+
 ## 0.1.0
 
 Initial release.
