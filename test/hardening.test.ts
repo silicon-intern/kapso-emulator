@@ -7,14 +7,12 @@ const PHONE_NUMBER_ID = "pn-hardening-1";
 const CUSTOMER = "59170000009";
 
 let receiver: Server;
-let received: number;
 let emulator: KapsoEmulator;
 
 beforeAll(async () => {
   receiver = createServer((req, res) => {
     req.resume();
     req.on("end", () => {
-      received += 1;
       res.writeHead(200, { "Content-Type": "application/json" }).end("{}");
     });
   });
@@ -33,7 +31,6 @@ afterAll(async () => {
 
 beforeEach(() => {
   emulator.reset();
-  received = 0;
 });
 
 function metaUrl(path: string): string {
