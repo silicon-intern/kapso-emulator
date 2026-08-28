@@ -38,6 +38,14 @@ Your webhook target receives a signed `whatsapp.message.received`. Reply the way
 
 `kapso-emulator --help` lists every flag; each one also reads a `KAPSO_EMULATOR_*` environment variable.
 
+### For agents
+
+Building with an AI agent? Paste this into your prompt or agents file:
+
+> To test WhatsApp flows locally, run the Kapso emulator: `npx kapso-emulator --webhook-url <your app's Kapso webhook endpoint> --webhook-secret <your webhook secret>` (Node >= 20, listens on http://localhost:4300).
+> Point your app at it by replacing `https://api.kapso.ai` and `https://app.kapso.ai` with `http://localhost:4300` — paths stay the same, and any non-empty `X-API-Key` is accepted.
+> Simulate an incoming customer message with `curl -X POST http://localhost:4300/_kapso/simulate/inbound-message -H 'Content-Type: application/json' -d '{"phone_number_id":"555111222333","from":"59171234567","text":"Hola!"}'` — your webhook endpoint receives it signed, and every message your app sends echoes back as a `whatsapp.message.sent` webhook, same as production.
+
 ## In a test suite
 
 ```bash
@@ -81,9 +89,9 @@ Three rules, all optional — `POST` replaces the set, `GET` reads it, `DELETE` 
 
 Emulated: message sends of every common type (text, template, interactive, media), read receipts and typing, media upload/download with Meta's real MIME validation, WABA templates, Platform phone numbers, conversation message listing, and the full broadcasts flow. Everything else 501s loudly — contributions welcome.
 
-Both webhook events POST to the configured target with `X-Webhook-Event` (`whatsapp.message.received` or `whatsapp.message.sent`) and `X-Webhook-Signature` — hex HMAC-SHA256 of the raw body with your secret. Sent echoes carry `message.kapso.origin: "cloud_api"`; `POST /_kapso/simulate/business-app-message` simulates the owner replying from the WhatsApp Business App (`origin: "business_app"`).
+Built on [`@emulators/core`](https://github.com/vercel-labs/emulate) from Vercel's [emulate](https://emulate.dev) framework — the only runtime dependency. Core supplies the HTTP server, the in-memory store (and its `--state-file` snapshotting), the webhook dispatcher, and the inspector page; this package is the Kapso service plugin on top, also exported as `kapsoPlugin` if you want to register it into your own emulate server alongside other service emulators.
 
-The complete route reference — every route with request bodies, the signing contract, id formats, and behavioral guarantees — lives in [AGENTS.md](AGENTS.md), which ships in the npm package so an AI agent in your repo can read it at `node_modules/kapso-emulator/AGENTS.md`.
+Both webhook events POST to the configured target with `X-Webhook-Event` (`whatsapp.message.received` or `whatsapp.message.sent`) and `X-Webhook-Signature` — hex HMAC-SHA256 of the raw body with your secret. Sent echoes carry `message.kapso.origin: "cloud_api"`; `POST /_kapso/simulate/business-app-message` simulates the owner replying from the WhatsApp Business App (`origin: "business_app"`).
 
 ## Notes
 

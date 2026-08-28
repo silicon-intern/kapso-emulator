@@ -37,8 +37,7 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "dist",
-    "AGENTS.md"
+    "dist"
   ],
   "scripts": {
     "build": "tsup",
